@@ -1,0 +1,195 @@
+heat_template_version: rocky
+
+description: >
+  Heat template to install postgresql on CentOS 7 or Ubuntu 18.04
+
+parameters:
+
+  instance_name:
+    type: string
+    description: The name to be used for the instance
+    default: instance
+
+  key_name:
+    type: string
+    description: Name of a KeyPair to enable SSH access to the instance
+
+  instance_type:
+    type: string
+    description: Instance type for the server
+    default: m1.medium
+
+  image_id:
+    type: string
+    description: Name or ID of the image to use for the servers
+    default: CentOS 7.6 x86_64
+
+  private_net:
+    type: string
+    description: Name of the project's private network
+    default: kcoakley_network
+
+  storage_availability_zone:
+    type: string
+    description: The Availability Zone to launch the instance
+    default: West-Datacenter
+
+  data_volume_size:
+    type: number
+    description: Size of the data volume in GB
+    default: 20
+    constraints:
+    - range: { min: 1, max: 1024 }
+      description: must be between 1 and 1024 GB
+
+  postgresql_major_version:
+    type: string
+    description: Major version number of postgresql to install
+    default: 11
+
+resources:
+
+  ssh_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: ssh_security_group
+      description: Port 22 for SSH
+      rules:
+      - protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+
+  postgres_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: postgres_security_group
+      description: Port 5432 for postgres
+      rules:
+        - protocol: tcp
+          port_range_min: 5432
+          port_range_max: 5432
+
+  nova_instance:
+    type: OS::Nova::Server
+    properties:
+      name: { get_param: instance_name }
+      image: { get_param: image_id }
+      flavor: { get_param: instance_type }
+      key_name: { get_param: key_name }
+      networks:
+        - network: { get_param: private_net }
+      security_groups:
+      - { get_resource: ssh_security_group }
+      - { get_resource: postgres_security_group }
+
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/sh -x
+
+            echo '#### Set Distribution Variables'
+
+            if grep -q "CentOS Linux" /etc/os-release; then
+              POSTGRESQL_PATH="/var/lib/pgsql/"
+            fi
+            if grep -q "Ubuntu" /etc/os-release; then
+              POSTGRESQL_PATH="/var/lib/postgresql/"
+            fi
+
+            echo '#### Set Distribution Variables'
+
+            echo '#### Start Software Install'
+
+            # Install ansible and git
+            if grep -q "CentOS Linux" /etc/os-release; then
+              /usr/bin/yum install epel-release -y
+              /usr/bin/yum install ansible git -y
+            fi
+            if grep -q "Ubuntu" /etc/os-release; then
+              export DEBIAN_FRONTEND=noninteractive
+              /usr/bin/apt-add-repository ppa:ansible/ansible -y
+              /usr/bin/apt-get install ansible git -y
+            fi
+
+            # Clone the ansible-role-disk role
+            /usr/bin/git clone https://github.com/kevincoakley/ansible-role-disk.git /etc/ansible/roles/ansible-role-disk/
+
+            # Clone the ansible-role-postgres role
+            /usr/bin/git clone https://github.com/kevincoakley/ansible-role-postgres.git /etc/ansible/roles/ansible-role-postgres/
+
+            # Create the ansible inventory
+            echo "[local]" >> /etc/ansible/hosts
+            echo "localhost ansible_connection=local" >> /etc/ansible/hosts
+
+            # Create the postgres playbook
+            echo "- name: postgres install
+              hosts: local
+              become: yes
+              become_method: sudo
+
+              vars:
+                - parted:
+                  - device: /dev/sdb
+                    number: 1
+                    label: gpt
+                    state: present
+                - lvg:
+                  - vg: vg_postgresql
+                    pvs: /dev/sdb1
+                - lvol:
+                  - vg: vg_postgresql
+                    lv: lv_postgresql
+                    shrink: false
+                    size: 100%FREE
+                - filesystem:
+                  - fstype: xfs
+                    dev: /dev/vg_postgresql/lv_postgresql
+                - mount:
+                  - path: $POSTGRESQL_PATH
+                    src: /dev/vg_postgresql/lv_postgresql
+                    fstype: xfs
+                    opts: defaults
+                - postgres_major_version: $postgresql_major_version
+                - postgres_listen_addresses: \"*\"
+                - postgres_client_auth:
+                  - type: host
+                    database: all
+                    user: all
+                    address: 0.0.0.0/0
+                    method: md5
+
+              roles:
+                - ansible-role-disk
+                - ansible-role-postgres" >> /etc/ansible/postgres.yml
+
+            # Run the postgres ansible playbook
+            if grep -q "CentOS Linux" /etc/os-release; then
+              /bin/ansible-playbook /etc/ansible/postgres.yml -i /etc/ansible/hosts
+            fi
+            if grep -q "Ubuntu" /etc/os-release; then
+              /usr/bin/ansible-playbook /etc/ansible/postgres.yml -i /etc/ansible/hosts
+            fi
+
+            echo '#### End Software Install'
+
+          params:
+            $postgresql_major_version: { get_param: postgresql_major_version }
+
+  data_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: { get_param: data_volume_size }
+      availability_zone: { get_param: storage_availability_zone }
+
+  data_volume_attachment:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      volume_id: { get_resource: data_volume }
+      instance_uuid: { get_resource: nova_instance }
+      mountpoint: /dev/vdb
+
+outputs:
+
+  private_address:
+    description: Private IP Address
+    value: { get_attr: [nova_instance, first_address] }
