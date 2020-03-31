@@ -47,6 +47,14 @@ parameters:
     description: Major version number of postgresql to install
     default: 11
 
+  download_path:
+    type: string
+    description: url to where the files to be imported are stored
+
+  file_list:
+    type: string
+    description: file name under download_path which contains the list of files
+
 resources:
 
   ssh_security_group:
@@ -172,8 +180,16 @@ resources:
 
             echo '#### End Software Install'
 
+            echo '#### Download the load-csv script'
+            /bin/su - postgres -c "/usr/bin/curl -s https://raw.githubusercontent.com/kevincoakley/cloud-benchmark-postgres/master/provision-scripts/postgresql/load-csv.sh > /var/lib/postgresql/load-csv.sh"
+
+            echo '#### Run the load-csv script'
+            /bin/su - postgres -c "/bin/bash /var/lib/postgresql/load-csv.sh $download_path $file_list"
+
           params:
             $postgresql_major_version: { get_param: postgresql_major_version }
+            $download_path: { get_param: download_path }
+            $file_list: { get_param: file_list }
 
   data_volume:
     type: OS::Cinder::Volume
