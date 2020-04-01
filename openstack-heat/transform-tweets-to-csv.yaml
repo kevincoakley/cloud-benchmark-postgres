@@ -1,0 +1,165 @@
+heat_template_version: rocky
+
+description: >
+  Heat template to tranform tweets to csv on CentOS 7 or Ubuntu 18.04
+
+parameters:
+
+  instance_name:
+    type: string
+    description: The name to be used for the instance
+    default: instance
+
+  key_name:
+    type: string
+    description: Name of a KeyPair to enable SSH access to the instance
+
+  instance_type:
+    type: string
+    description: Instance type for the server
+    default: r1.xlarge
+
+  image_id:
+    type: string
+    description: Name or ID of the image to use for the servers
+    default: Ubuntu 18.04 LTS x86_64
+
+  private_net:
+    type: string
+    description: Name of the project's private network
+    default: kcoakley_network
+
+  storage_availability_zone:
+    type: string
+    description: The Availability Zone to launch the instance
+    default: West-Datacenter
+
+  data_volume_size:
+    type: number
+    description: Size of the data volume in GB
+    default: 100
+    constraints:
+    - range: { min: 1, max: 1024 }
+      description: must be between 1 and 1024 GB
+
+  ram_disk_size:
+    type: number
+    description: Size of the ram disk in GB
+    default: 16
+
+resources:
+
+  ssh_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: ssh_security_group
+      description: Port 22 for SSH
+      rules:
+      - protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+
+  nova_instance:
+    type: OS::Nova::Server
+    properties:
+      name: { get_param: instance_name }
+      image: { get_param: image_id }
+      flavor: { get_param: instance_type }
+      key_name: { get_param: key_name }
+      networks:
+        - network: { get_param: private_net }
+      security_groups:
+      - { get_resource: ssh_security_group }
+
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/sh -x
+
+            echo '#### Start Software Install'
+
+            # Install ansible and git
+            if grep -q "CentOS Linux" /etc/os-release; then
+              /usr/bin/yum install epel-release -y
+              /usr/bin/yum install ansible git -y
+            fi
+            if grep -q "Ubuntu" /etc/os-release; then
+              export DEBIAN_FRONTEND=noninteractive
+              /usr/bin/apt-add-repository ppa:ansible/ansible -y
+              /usr/bin/apt-get install ansible git -y
+            fi
+
+            # Clone the ansible-role-disk role
+            /usr/bin/git clone https://github.com/kevincoakley/ansible-role-disk.git /etc/ansible/roles/ansible-role-disk/
+
+            # Create the ansible inventory
+            echo "[local]" >> /etc/ansible/hosts
+            echo "localhost ansible_connection=local" >> /etc/ansible/hosts
+
+            # Create the tranform-tweets-to-csv playbook
+            echo "- name: tranform-tweets-to-csv
+              hosts: local
+              become: yes
+              become_method: sudo
+
+              vars:
+                - parted:
+                  - device: /dev/sdb
+                    number: 1
+                    label: gpt
+                    state: present
+                - lvg:
+                  - vg: vg_diskworkspace
+                    pvs: /dev/sdb1
+                - lvol:
+                  - vg: vg_diskworkspace
+                    lv: lv_diskworkspace
+                    shrink: false
+                    size: 100%FREE
+                - filesystem:
+                  - fstype: xfs
+                    dev: /dev/vg_diskworkspace/lv_diskworkspace
+                - mount:
+                  - path: /mnt/disk-workspace
+                    src: /dev/vg_diskworkspace/lv_diskworkspace
+                    fstype: xfs
+                    opts: defaults
+                  - path: /mnt/ram-workspace
+                    src: tmpfs
+                    fstype: tmpfs
+                    opts: size=$ram_disk_sizeg
+
+              roles:
+                - ansible-role-disk" >> /etc/ansible/tranform-tweets-to-csv.yml
+
+            # Run the postgres ansible playbook
+            if grep -q "CentOS Linux" /etc/os-release; then
+              /bin/ansible-playbook /etc/ansible/tranform-tweets-to-csv.yml -i /etc/ansible/hosts
+            fi
+            if grep -q "Ubuntu" /etc/os-release; then
+              /usr/bin/ansible-playbook /etc/ansible/tranform-tweets-to-csv.yml -i /etc/ansible/hosts
+            fi
+
+            echo '#### End Software Install'
+
+          params:
+            $ram_disk_size: { get_param: ram_disk_size }
+
+  data_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: { get_param: data_volume_size }
+      availability_zone: { get_param: storage_availability_zone }
+
+  data_volume_attachment:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      volume_id: { get_resource: data_volume }
+      instance_uuid: { get_resource: nova_instance }
+      mountpoint: /dev/vdb
+
+outputs:
+
+  private_address:
+    description: Private IP Address
+    value: { get_attr: [nova_instance, first_address] }
