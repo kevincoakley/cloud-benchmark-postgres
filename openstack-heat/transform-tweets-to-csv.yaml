@@ -92,6 +92,9 @@ resources:
             # Clone the ansible-role-disk role
             /usr/bin/git clone https://github.com/kevincoakley/ansible-role-disk.git /etc/ansible/roles/ansible-role-disk/
 
+            # Clone the ansible-role-package role
+            /usr/bin/git clone https://github.com/kevincoakley/ansible-role-package.git /etc/ansible/roles/ansible-role-package/
+
             # Create the ansible inventory
             echo "[local]" >> /etc/ansible/hosts
             echo "localhost ansible_connection=local" >> /etc/ansible/hosts
@@ -128,9 +131,13 @@ resources:
                     src: tmpfs
                     fstype: tmpfs
                     opts: size=$ram_disk_sizeg
+                - package:
+                  - name: python3-swiftclient
+                  - name: python3-openstackclient
 
               roles:
-                - ansible-role-disk" >> /etc/ansible/tranform-tweets-to-csv.yml
+                - ansible-role-disk
+                - ansible-role-package" >> /etc/ansible/tranform-tweets-to-csv.yml
 
             # Run the postgres ansible playbook
             if grep -q "CentOS Linux" /etc/os-release; then
