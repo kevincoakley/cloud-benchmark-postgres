@@ -41,6 +41,16 @@ while read file; do
       echo "Downloading $DOWNLOAD_FILE" >> /var/lib/postgresql/tmp/psql_output.txt
       /usr/bin/swift download -o /var/lib/postgresql/tmp/$DOWNLOAD_FILE $DOWNLOAD_CONTAINER $file >> /var/lib/postgresql/tmp/psql_output.txt
 
+      if [[ $DOWNLOAD_FILE =~ \.gz$ ]]
+        then
+          echo "Uncompressing /var/lib/postgresql/tmp/$DOWNLOAD_FILE"
+          echo "Uncompressing /var/lib/postgresql/tmp/$DOWNLOAD_FILE" >> /var/lib/postgresql/tmp/psql_output.txt
+          /bin/gunzip /var/lib/postgresql/tmp/$DOWNLOAD_FILE >> /var/lib/postgresql/tmp/psql_output.txt
+          echo "" > /var/lib/postgresql/tmp/$DOWNLOAD_FILE
+          UNCOMPRESSED_FILE=${DOWNLOAD_FILE//.gz/}
+          DOWNLOAD_FILE=$UNCOMPRESSED_FILE
+      fi
+
       echo "$file" >> /var/lib/postgresql/tmp/psql_time.txt
       echo "$file" >> /var/lib/postgresql/tmp/psql_output.txt
       /bin/date >> /var/lib/postgresql/tmp/psql_time.txt
