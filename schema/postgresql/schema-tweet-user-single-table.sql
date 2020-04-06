@@ -59,8 +59,4 @@ CREATE TABLE public.tweet (
 
 ALTER TABLE public.tweet OWNER TO postgres;
 
-ALTER TABLE ONLY public.tweet ADD CONSTRAINT tweet_id_pk PRIMARY KEY (tweet_id);
-
-CREATE UNIQUE INDEX tweet_id_uindex ON public.tweet USING btree (tweet_id);
-
-CREATE INDEX user_id_uindex ON public.tweet USING btree (user_id);
+ALTER TABLE public.tweet ADD COLUMN unique_id SERIAL PRIMARY KEY
